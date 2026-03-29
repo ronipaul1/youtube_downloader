@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Video/Audio Downloader</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 0; padding: 24px; background: #0f172a; color: #e2e8f0; }
+    h1 { margin-bottom: 8px; }
+    .panel { background: #1e293b; padding: 16px; border-radius: 12px; margin-bottom: 16px; box-shadow: 0 10px 30px rgba(0,0,0,0.25); }
+    label { display: block; margin-bottom: 6px; font-size: 0.95rem; }
+    input, select { width: 100%; padding: 10px; border-radius: 8px; border: 1px solid #334155; background: #0b1220; color: #e2e8f0; }
+    button { margin-top: 10px; padding: 10px 14px; border: none; border-radius: 8px; background: linear-gradient(135deg,#22d3ee,#6366f1); color: #0b1220; font-weight: 700; cursor: pointer; }
+    button:hover { filter: brightness(1.08); }
+    .grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+    .flash { padding: 10px; border-radius: 8px; margin-bottom: 10px; }
+    .flash.success { background: #0f766e; }
+    .flash.error { background: #b91c1c; }
+    .badge { display: inline-block; padding: 4px 8px; border-radius: 6px; background: #1e293b; border: 1px solid #334155; font-size: 0.85rem; color: #cbd5e1; margin-top: 6px; }
+    /* Progress overlay */
+    .overlay { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.8); display: none; align-items: center; justify-content: center; z-index: 20; }
+    .overlay.active { display: flex; }
+    .progress-box { width: min(520px, 90vw); background: #0b1220; border: 1px solid #334155; border-radius: 12px; padding: 18px; box-shadow: 0 18px 48px rgba(0,0,0,0.45); }
+    .bar { position: relative; height: 14px; border-radius: 999px; overflow: hidden; background: #1e293b; }
+    .bar-fill { position: absolute; inset: 0; width: 0%; background: linear-gradient(90deg,#22d3ee,#6366f1); transition: width 0.2s ease; }
+    .bar.indeterminate .bar-fill { width: 40%; animation: slide 1.2s linear infinite; }
+    @keyframes slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(250%); } }
+    .row { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <h1>Multi-Site Downloader</h1>
+  <p>Paste a link from YouTube, Vimeo, Facebook, X/Twitter, Instagram, TikTok, and other yt-dlp supported sites.</p>
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      {% for category, message in messages %}
+        <div class="flash {{ category }}">{{ message }}</div>
+      {% endfor %}
+    {% endif %}
+  {% endwith %}
+
+  <div class="grid">
+    <div class="panel">
+      <h2>MP3 Audio</h2>
+      <div class="badge" id="audio-platform">Platform: auto</div>
+      <form method="post" action="{{ url_for('handle_audio') }}" class="dl-form" data-target="audio">
+        <label for="audio-url">Video URL</label>
+        <input id="audio-url" name="url" type="url" placeholder="https://..." required>
+        <div class="row">
+          <button type="submit">Download MP3</button>
+          <button type="button" class="playlist-btn" data-endpoint="{{ url_for('handle_audio_playlist') }}">Playlist -> ZIP</button>
+        </div>
+      </form>
+    </div>
+
+    <div class="panel">
+      <h2>Full Video</h2>
+      <div class="badge" id="video-platform">Platform: auto</div>
+      <form method="post" action="{{ url_for('handle_video') }}" class="dl-form" data-target="video">
+        <label for="video-url">Video URL</label>
+        <input id="video-url" name="url" type="url" placeholder="https://..." required>
+        <label for="quality">Quality</label>
+        <select id="quality" name="quality">
+          {% for q in qualities %}
+            <option value="{{ q }}">{{ q }}</option>
+          {% endfor %}
+        </select>
+        <div class="row">
+          <button type="submit">Download Video</button>
+          <button type="button" class="playlist-btn" data-endpoint="{{ url_for('handle_video_playlist') }}">Playlist -> ZIP</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id="overlay" class="overlay">
+    <div class="progress-box">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+        <strong>Downloading...</strong>
+        <span id="status-text">Starting</span>
+      </div>
+      <div class="bar" id="bar"><div class="bar-fill" id="bar-fill"></div></div>
+      <p style="margin-top:10px;font-size:0.9rem;color:#94a3b8;">Keep this tab open until the download finishes. Playlists are zipped.</p>
+    </div>
+  </div>
+  <script>
+    const overlay = document.getElementById('overlay');
+    const statusText = document.getElementById('status-text');
+    const bar = document.getElementById('bar');
+    const barFill = document.getElementById('bar-fill');
+    const forms = document.querySelectorAll('.dl-form');
+    const platformBadge = {
+      audio: document.getElementById('audio-platform'),
+      video: document.getElementById('video-platform'),
+    };
+    const platformMap = {
+      'youtube.com': 'YouTube', 'youtu.be': 'YouTube',
+      'vimeo.com': 'Vimeo',
+      'facebook.com': 'Facebook', 'fb.watch': 'Facebook',
+      'twitter.com': 'X/Twitter', 'x.com': 'X/Twitter',
+      'instagram.com': 'Instagram', 'instagr.am': 'Instagram',
+      'tiktok.com': 'TikTok',
+    };
+
+    function resetBar() {
+      bar.classList.add('indeterminate');
+      barFill.style.width = '0%';
+    }
+
+    function detectPlatform(url) {
+      try {
+        const host = new URL(url).hostname.replace(/^www\./, '').toLowerCase();
+        return platformMap[host] || 'Auto (yt-dlp)';
+      } catch (e) {
+        return 'Auto (yt-dlp)';
+      }
+    }
+
+    function guessExt(endpoint) {
+      if (endpoint.includes('audio_playlist')) return '.zip';
+      if (endpoint.includes('video_playlist')) return '.zip';
+      if (endpoint.includes('audio')) return '.mp3';
+      if (endpoint.includes('video')) return '.mp4';
+      return '.bin';
+    }
+
+    async function runDownload(action, formData) {
+      overlay.classList.add('active');
+      statusText.textContent = 'Contacting site...';
+      resetBar();
+
+      const response = await fetch(action, {
+        method: 'POST',
+        body: formData,
+        headers: { 'X-Requested-With': 'fetch' },
+      });
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || `HTTP ${response.status}`);
+      }
+
+      const total = Number(response.headers.get('Content-Length')) || 0;
+      if (total > 0) bar.classList.remove('indeterminate');
+
+      const disposition = response.headers.get('Content-Disposition') || '';
+      const filenameMatch = disposition.match(/filename="?([^";]+)"?/i);
+      const fallback = 'download' + guessExt(action);
+      const filename = filenameMatch ? filenameMatch[1] : fallback;
+
+      const reader = response.body.getReader();
+      let received = 0;
+      const chunks = [];
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        received += value.length;
+        if (total > 0) {
+          const pct = Math.min(100, (received / total) * 100);
+          barFill.style.width = `${pct}%`;
+          statusText.textContent = `Downloading... ${pct.toFixed(0)}%`;
+        } else {
+          statusText.textContent = `Downloading... ${Math.ceil(received / 1024)} KB`;
+        }
+      }
+
+      const blob = new Blob(chunks, { type: response.headers.get('Content-Type') || 'application/octet-stream' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+
+      statusText.textContent = 'Done';
+      barFill.style.width = '100%';
+    }
+
+    async function handleDownload(event) {
+      event.preventDefault();
+      const form = event.target;
+      const formData = new FormData(form);
+      const action = form.getAttribute('action');
+      try {
+        await runDownload(action, formData);
+      } catch (err) {
+        statusText.textContent = 'Error';
+        alert('Download failed: ' + err.message);
+      } finally {
+        setTimeout(() => {
+          overlay.classList.remove('active');
+          statusText.textContent = 'Starting';
+          resetBar();
+        }, 800);
+      }
+    }
+
+    async function handlePlaylistClick(event) {
+      const btn = event.currentTarget;
+      const form = btn.closest('form');
+      const formData = new FormData(form);
+      const endpoint = btn.dataset.endpoint;
+      try {
+        await runDownload(endpoint, formData);
+      } catch (err) {
+        statusText.textContent = 'Error';
+        alert('Playlist download failed: ' + err.message);
+      } finally {
+        setTimeout(() => {
+          overlay.classList.remove('active');
+          statusText.textContent = 'Starting';
+          resetBar();
+        }, 800);
+      }
+    }
+
+    function wirePlatformBadge(form) {
+      const target = form.dataset.target;
+      const input = form.querySelector('input[name="url"]');
+      if (!input || !platformBadge[target]) return;
+      const update = () => {
+        platformBadge[target].textContent = 'Platform: ' + detectPlatform(input.value.trim());
+      };
+      input.addEventListener('input', update);
+      update();
+    }
+
+    forms.forEach(form => {
+      form.addEventListener('submit', handleDownload);
+      wirePlatformBadge(form);
+      form.querySelectorAll('.playlist-btn').forEach(btn => btn.addEventListener('click', handlePlaylistClick));
+    });
+  </script>
+</body>
+</html>
