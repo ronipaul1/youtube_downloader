@@ -90,8 +90,3 @@ def handle_video_playlist():
             return (f"Playlist video failed: {exc}", 400)
         flash(f"Playlist video failed: {exc}", "error")
         return redirect(url_for("index"))
-
-
-if __name__ == "__main__":
-    # Run: flask --app app run --reload
-    app.run(debug=True)
