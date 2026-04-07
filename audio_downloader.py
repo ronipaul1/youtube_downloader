@@ -57,6 +57,8 @@ def download_audio(url: str, outdir: Path) -> Path:
     opts = _common_opts(outdir)
     with YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=True)
+        if info is None:
+            raise RuntimeError("yt-dlp returned no info (download may have failed).")
         base = Path(ydl.prepare_filename(info))
     return base.with_suffix(".mp3")
 

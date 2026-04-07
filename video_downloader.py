@@ -53,6 +53,8 @@ def download_video(url: str, outdir: Path, quality: str) -> Path:
     opts = _common_opts(outdir, quality)
     with YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=True)
+        if info is None:
+            raise RuntimeError("yt-dlp returned no info (download may have failed).")
         base = Path(ydl.prepare_filename(info))
     return base.with_suffix(".mp4")
 
