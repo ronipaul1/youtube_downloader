@@ -32,6 +32,8 @@ def handle_audio():
             mimetype="audio/mpeg",
         )
     except Exception as exc:  # pragma: no cover - runtime feedback
+        if request.headers.get("X-Requested-With") == "fetch":
+            return (f"Audio download failed: {exc}", 400)
         flash(f"Audio download failed: {exc}", "error")
         return redirect(url_for("index"))
 
@@ -70,6 +72,8 @@ def handle_video():
             mimetype="video/mp4",
         )
     except Exception as exc:  # pragma: no cover - runtime feedback
+        if request.headers.get("X-Requested-With") == "fetch":
+            return (f"Video download failed: {exc}", 400)
         flash(f"Video download failed: {exc}", "error")
         return redirect(url_for("index"))
 
