@@ -21,7 +21,7 @@ def _safe_name(name: str, fallback: str = "playlist") -> str:
     return sanitized or fallback
 
 
-def _common_opts(outdir: Path, quality: str) -> dict:
+def _common_opts(outdir: Path, quality: str, ignore_errors: bool = False) -> dict:
     fmt = QUALITY_MAP.get(quality, QUALITY_MAP["best"])
     ffmpeg_location = os.getenv("FFMPEG_PATH")  # optional override
     cookies_file = os.getenv("YT_COOKIES_FILE")  # optional: exported cookies.txt
@@ -31,7 +31,7 @@ def _common_opts(outdir: Path, quality: str) -> dict:
         "format": fmt,
         "merge_output_format": "mp4",
         "outtmpl": str(outdir / "%(title)s.%(ext)s"),
-        "ignoreerrors": True,
+        "ignoreerrors": ignore_errors,
     }
     if ffmpeg_location:
         opts["ffmpeg_location"] = ffmpeg_location
@@ -50,7 +50,7 @@ def download_video(url: str, outdir: Path, quality: str) -> Path:
     Returns the Path to the saved video file (mp4).
     """
     outdir.mkdir(parents=True, exist_ok=True)
-    opts = _common_opts(outdir, quality)
+    opts = _common_opts(outdir, quality, ignore_errors=False)
     with YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=True)
         if info is None:
@@ -64,7 +64,7 @@ def download_video_playlist(url: str, outdir: Path, quality: str) -> Path:
     outdir.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = Path(tmpdir)
-        opts = _common_opts(tmp, quality)
+        opts = _common_opts(tmp, quality, ignore_errors=True)
         opts["outtmpl"] = str(tmp / "%(playlist_title)s/%(title)s.%(ext)s")
         with YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=True)
