@@ -3,7 +3,7 @@
 Functions are import-safe for reuse in the web app.
 """
 import argparse
-from pathlib import Path
+import json
 import os
 import re
 import shutil
@@ -19,15 +19,48 @@ def _safe_name(name: str, fallback: str = "playlist") -> str:
     return sanitized or fallback
 
 
+def _prepare_cookiefile(cookie_path: str | None) -> str | None:
+    """Ensure cookie file is Netscape format; convert JSON export if needed."""
+    if not cookie_path:
+        return None
+    path = Path(cookie_path)
+    if path.suffix.lower() != ".json":
+        return cookie_path
+
+    data = json.loads(path.read_text(encoding="utf-8"))
+    cookies = data.get("cookies") if isinstance(data, dict) else data
+    if not isinstance(cookies, list):
+        raise RuntimeError("Cookie JSON not understood; expected a list or a dict with 'cookies'")
+
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".txt")
+    lines = []
+    for c in cookies:
+        domain = c.get("domain", "")
+        include_subdomains = "TRUE" if domain.startswith(".") else "FALSE"
+        pathv = c.get("path", "/")
+        secure = "TRUE" if c.get("secure", False) else "FALSE"
+        expires = int(c.get("expirationDate", c.get("expires", 0)) or 0)
+        name = c.get("name", "")
+        value = c.get("value", "")
+        lines.append(f"{domain}\t{include_subdomains}\t{pathv}\t{secure}\t{expires}\t{name}\t{value}\n")
+    tmp.write("".join(lines).encode("utf-8"))
+    tmp.flush()
+    return tmp.name
+
+
 def _common_opts(outdir: Path, ignore_errors: bool = False) -> Tuple[dict, str, str]:
     ffmpeg_location = os.getenv("FFMPEG_PATH")
     cookies_file = os.getenv("YT_COOKIES_FILE")
+    if not cookies_file:
+        default_txt = Path(__file__).parent / "YT_COOKIES_FILE.txt"
+        if default_txt.exists():
+            cookies_file = str(default_txt)
     cookies_from_browser = os.getenv("YT_COOKIES_BROWSER")
     proxy = os.getenv("YTDLP_PROXY")  # optional HTTP/HTTPS proxy, e.g. http://127.0.0.1:7890
+    cookiefile_resolved = _prepare_cookiefile(cookies_file)
     opts = {
         "format": "bestaudio/best",
         "outtmpl": str(outdir / "%(title)s.%(ext)s"),
-        "ignoreerrors": True,  # keep going if some items fail (e.g., geo-blocked)
         "ignoreerrors": ignore_errors,
         "postprocessors": [
             {
@@ -39,8 +72,8 @@ def _common_opts(outdir: Path, ignore_errors: bool = False) -> Tuple[dict, str, 
     }
     if ffmpeg_location:
         opts["ffmpeg_location"] = ffmpeg_location
-    if cookies_file:
-        opts["cookiefile"] = cookies_file
+    if cookiefile_resolved:
+        opts["cookiefile"] = cookiefile_resolved
     if cookies_from_browser:
         opts["cookiesfrombrowser"] = (cookies_from_browser,)
     if proxy:

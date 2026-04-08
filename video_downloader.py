@@ -1,5 +1,6 @@
 """Helpers to download full YouTube videos using yt-dlp."""
 import argparse
+import json
 import os
 import re
 import shutil
@@ -21,12 +22,46 @@ def _safe_name(name: str, fallback: str = "playlist") -> str:
     return sanitized or fallback
 
 
+def _prepare_cookiefile(cookie_path: str | None) -> str | None:
+    """Ensure cookie file is Netscape format; convert JSON export if needed."""
+    if not cookie_path:
+        return None
+    path = Path(cookie_path)
+    if path.suffix.lower() != ".json":
+        return cookie_path
+
+    data = json.loads(path.read_text(encoding="utf-8"))
+    cookies = data.get("cookies") if isinstance(data, dict) else data
+    if not isinstance(cookies, list):
+        raise RuntimeError("Cookie JSON not understood; expected a list or a dict with 'cookies'")
+
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".txt")
+    lines = []
+    for c in cookies:
+        domain = c.get("domain", "")
+        include_subdomains = "TRUE" if domain.startswith(".") else "FALSE"
+        pathv = c.get("path", "/")
+        secure = "TRUE" if c.get("secure", False) else "FALSE"
+        expires = int(c.get("expirationDate", c.get("expires", 0)) or 0)
+        name = c.get("name", "")
+        value = c.get("value", "")
+        lines.append(f"{domain}\t{include_subdomains}\t{pathv}\t{secure}\t{expires}\t{name}\t{value}\n")
+    tmp.write("".join(lines).encode("utf-8"))
+    tmp.flush()
+    return tmp.name
+
+
 def _common_opts(outdir: Path, quality: str, ignore_errors: bool = False) -> dict:
     fmt = QUALITY_MAP.get(quality, QUALITY_MAP["best"])
     ffmpeg_location = os.getenv("FFMPEG_PATH")  # optional override
     cookies_file = os.getenv("YT_COOKIES_FILE")  # optional: exported cookies.txt
+    if not cookies_file:
+        default_txt = Path(__file__).parent / "YT_COOKIES_FILE.txt"
+        if default_txt.exists():
+            cookies_file = str(default_txt)
     cookies_from_browser = os.getenv("YT_COOKIES_BROWSER")  # optional: e.g., "chrome"
     proxy = os.getenv("YTDLP_PROXY")  # optional HTTP/HTTPS proxy
+    cookiefile_resolved = _prepare_cookiefile(cookies_file)
     opts = {
         "format": fmt,
         "merge_output_format": "mp4",
@@ -35,8 +70,8 @@ def _common_opts(outdir: Path, quality: str, ignore_errors: bool = False) -> dic
     }
     if ffmpeg_location:
         opts["ffmpeg_location"] = ffmpeg_location
-    if cookies_file:
-        opts["cookiefile"] = cookies_file
+    if cookiefile_resolved:
+        opts["cookiefile"] = cookiefile_resolved
     if cookies_from_browser:
         opts["cookiesfrombrowser"] = (cookies_from_browser,)
     if proxy:
